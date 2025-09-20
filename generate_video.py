@@ -8,15 +8,6 @@ import shutil
 import cv2
 import sys
 
-# 添加LatentSync相关导入
-from omegaconf import OmegaConf
-from diffusers import AutoencoderKL, DDIMScheduler
-from latentsync.models.unet import UNet3DConditionModel
-from latentsync.pipelines.lipsync_pipeline import LipsyncPipeline
-from latentsync.whisper.audio2feature import Audio2Feature
-from diffusers.utils.import_utils import is_xformers_available
-from accelerate.utils import set_seed
-
 loop_vid_from_endframe = True
 
 # 全局变量存储模型，避免重复加载
@@ -43,6 +34,15 @@ def setup_latentsync():
         os.chdir("LatentSync")
     
     try:
+        # 现在导入LatentSync相关模块
+        from omegaconf import OmegaConf
+        from diffusers import AutoencoderKL, DDIMScheduler
+        from latentsync.models.unet import UNet3DConditionModel
+        from latentsync.pipelines.lipsync_pipeline import LipsyncPipeline
+        from latentsync.whisper.audio2feature import Audio2Feature
+        from diffusers.utils.import_utils import is_xformers_available
+        from accelerate.utils import set_seed
+        
         # 创建必要的目录 - 使用原来的路径定义
         os.makedirs("/kaggle/working//.cache/torch/hub/checkpoints", exist_ok=True)
         os.makedirs("checkpoints", exist_ok=True)
@@ -128,6 +128,9 @@ def perform_inference(video_path, audio_path, seed, num_steps, guidance_scale, o
         # 设置LatentSync环境
         pipeline, config = setup_latentsync()
         
+        # 导入set_seed函数
+        from accelerate.utils import set_seed
+        
         print(f"开始执行推理: {video_path} + {audio_path} -> {output_path}")
         print(f"参数: seed={seed}, steps={num_steps}, guidance={guidance_scale}")
         
@@ -159,7 +162,6 @@ def perform_inference(video_path, audio_path, seed, num_steps, guidance_scale, o
         print(f"推理过程中发生错误: {str(e)}")
         # 如果推理失败，返回原始视频路径
         return video_path
-
 
 def convert_video_fps(input_path, target_fps):
     if not os.path.exists(input_path) or os.path.getsize(input_path) == 0:
@@ -473,9 +475,7 @@ def pad_audio_to_multiple_of_16(audio_path, target_fps=25):
 
     return padded_audio_path, int((waveform.shape[1] / sample_rate) * target_fps), waveform.shape[1] / sample_rate
 
-    import shutil
-    shutil.copy2(video_path, output_path)
-    print("推理完成（临时实现）")
+
 
 def generate_video(video_path, audio_path, seed=1247, num_steps=20, guidance_scale=1.0, 
                   video_scale=0.5, output_fps=25, output_path="output_video.mp4"):
@@ -486,6 +486,15 @@ def generate_video(video_path, audio_path, seed=1247, num_steps=20, guidance_sca
     print("开始视频生成...")
     print(f"视频路径: {video_path}")
     print(f"音频路径: {audio_path}")
+    
+    # 首先进行LatentSync环境设置
+    print("正在初始化LatentSync环境...")
+    try:
+        pipeline, config = setup_latentsync()
+        print("LatentSync环境初始化完成！")
+    except Exception as e:
+        print(f"LatentSync环境初始化失败: {str(e)}")
+        return None
     
     if not os.path.exists(video_path):
         print(f"错误: 视频文件不存在 {video_path}")
