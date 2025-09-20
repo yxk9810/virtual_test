@@ -46,6 +46,7 @@ def find_latentsync_path():
 
 def setup_latentsync():
     """设置LatentSync环境"""
+    global LATENTSYNC_PATH
     print("🔍 正在查找LatentSync目录...")
     
     latentsync_path = find_latentsync_path()
@@ -61,6 +62,7 @@ def setup_latentsync():
             return False
     else:
         print(f"✅ 找到LatentSync目录: {latentsync_path}")
+        LATENTSYNC_PATH = latentsync_path  # 修复：设置全局变量
     
     # 验证LatentSync目录结构
     config_file = os.path.join(LATENTSYNC_PATH, "configs", "unet", "first_stage.yaml")
@@ -70,7 +72,6 @@ def setup_latentsync():
     
     print("✅ LatentSync环境设置完成")
     return True
-
 def download_models():
     """下载必要的模型文件"""
     print("📥 正在下载模型文件...")
