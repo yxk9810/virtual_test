@@ -17,6 +17,7 @@ class VirtualChatApp:
         self.chat_history = []
         # 使用welcome_video.mp4作为基础视频
         self.base_video_path = "welcome_video.mp4"
+        self.current_video = None  # 当前显示的视频
         
         # 检查视频文件是否存在
         if not os.path.exists(self.base_video_path):
@@ -27,6 +28,7 @@ class VirtualChatApp:
         
         # 创建初始欢迎视频
         self.initial_video = self.create_initial_video()
+        self.current_video = self.initial_video
         
     def create_initial_video(self):
         """创建初始欢迎视频"""
@@ -46,7 +48,7 @@ class VirtualChatApp:
     def process_message(self, user_input, history, progress=gr.Progress()):
         """处理用户消息的完整流程"""
         if not user_input.strip():
-            return history, "", None, "⚠️ Please enter a message."
+            return history, "", self.current_video, "⚠️ Please enter a message."
             
         # 更新状态
         progress(0.1, desc="🤖 Generating AI response...")
@@ -83,61 +85,72 @@ class VirtualChatApp:
                 print(f"音频生成输出: {result.stdout}")
             else:
                 print(f"音频生成失败: {result.stderr}")
-                return new_history, "", None, f"⚠️ Audio generation failed: {result.stderr}"
+                return new_history, "", self.current_video, f"⚠️ Audio generation failed: {result.stderr}"
                 
         except subprocess.TimeoutExpired:
             print("音频生成超时")
-            return new_history, "", None, "⚠️ Audio generation timeout"
+            return new_history, "", self.current_video, "⚠️ Audio generation timeout"
         except Exception as e:
             print(f"音频生成异常: {str(e)}")
-            return new_history, "", None, f"⚠️ Audio generation error: {str(e)}"
+            return new_history, "", self.current_video, f"⚠️ Audio generation error: {str(e)}"
         
         # 3. 生成视频
         progress(0.6, desc="🎬 Generating response video...")
         video_filename = f"video_{int(time.time())}.mp4"
         
         try:
-            # 调用run_latentsync.py生成视频
+            # 使用绝对路径调用run_latentsync.py生成视频
+            current_dir = os.getcwd()
+            welcome_video_abs = os.path.join(current_dir, "welcome_video.mp4")
+            audio_file_abs = os.path.join(current_dir, audio_filename)
+            video_file_abs = os.path.join(current_dir, video_filename)
+            
             cmd = [
                 "python", "run_latentsync.py",
-                "welcome_video.mp4",  # 输入视频
-                audio_filename,       # 输入音频
-                video_filename        # 输出视频
+                welcome_video_abs,  # 使用绝对路径
+                audio_file_abs,     # 使用绝对路径
+                video_file_abs      # 使用绝对路径
             ]
             
             print(f"执行视频生成命令: {' '.join(cmd)}")
+            print(f"当前工作目录: {current_dir}")
+            print(f"输入视频路径: {welcome_video_abs}")
+            print(f"输入音频路径: {audio_file_abs}")
+            print(f"输出视频路径: {video_file_abs}")
+            
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)  # 5分钟超时
             
+            print(f"视频生成返回码: {result.returncode}")
+            print(f"视频生成标准输出: {result.stdout}")
+            print(f"视频生成错误输出: {result.stderr}")
+            
             if result.returncode == 0:
-                print(f"视频生成成功: {video_filename}")
-                print(f"视频生成输出: {result.stdout}")
+                # 检查输出文件是否真的存在
+                if os.path.exists(video_file_abs) and os.path.getsize(video_file_abs) > 0:
+                    print(f"视频生成成功: {video_filename}")
+                    # 更新当前视频
+                    self.current_video = video_filename
+                    # 清理音频文件（保留视频文件）
+                    self.cleanup_file(audio_filename)
+                    return new_history, "", video_filename, f"✅ Successfully generated response video: {video_filename}"
+                else:
+                    print(f"视频文件不存在或为空: {video_file_abs}")
+                    self.cleanup_file(audio_filename)
+                    return new_history, "", self.current_video, "⚠️ Video file was not created properly"
             else:
                 print(f"视频生成失败: {result.stderr}")
-                # 如果视频生成失败，清理音频文件
+                # 如果视频生成失败，清理音频文件，但不更新视频
                 self.cleanup_file(audio_filename)
-                return new_history, "", None, f"⚠️ Video generation failed: {result.stderr}"
+                return new_history, "", self.current_video, f"⚠️ Video generation failed: {result.stderr}"
                 
         except subprocess.TimeoutExpired:
             print("视频生成超时")
             self.cleanup_file(audio_filename)
-            return new_history, "", None, "⚠️ Video generation timeout"
+            return new_history, "", self.current_video, "⚠️ Video generation timeout"
         except Exception as e:
             print(f"视频生成异常: {str(e)}")
             self.cleanup_file(audio_filename)
-            return new_history, "", None, f"⚠️ Video generation error: {str(e)}"
-        
-        progress(0.9, desc="🎉 Finalizing...")
-        
-        # 4. 检查生成的文件是否存在
-        if os.path.exists(video_filename):
-            print(f"响应视频生成成功: {video_filename}")
-            # 清理音频文件（保留视频文件）
-            self.cleanup_file(audio_filename)
-            return new_history, "", video_filename, f"✅ Successfully generated response video: {video_filename}"
-        else:
-            print("响应视频文件未找到")
-            self.cleanup_file(audio_filename)
-            return new_history, "", None, "⚠️ Response video file not found."
+            return new_history, "", self.current_video, f"⚠️ Video generation error: {str(e)}"
     
     def cleanup_file(self, filename):
         """清理临时文件"""
@@ -151,7 +164,9 @@ class VirtualChatApp:
     def clear_chat(self):
         """清空聊天历史"""
         self.chat_session.clear_history()
-        return [], "", self.initial_video, "💬 Chat cleared! Ready for new conversation."
+        # 重置为初始视频
+        self.current_video = self.initial_video
+        return [], "", self.current_video, "💬 Chat cleared! Ready for new conversation."
 
 def create_interface():
     app = VirtualChatApp()
@@ -172,7 +187,7 @@ def create_interface():
     with gr.Blocks(title="🤖 Virtual Chat AI", theme=gr.themes.Soft(), css=custom_css) as demo:
         # 标题和描述
         gr.Markdown("""
-        # 🤖 Virtual Chat with AI Host
+        # �� Virtual Chat with AI Host
         Chat with an AI virtual host! The AI will respond with both text and personalized video messages.
         """)
         
@@ -244,7 +259,7 @@ def create_interface():
         # 事件处理函数
         def handle_send(user_input, history):
             if not user_input.strip():
-                return history, "", None, "⚠️ Please enter a message."
+                return history, "", app.current_video, "⚠️ Please enter a message."
             
             # 调用处理函数
             new_history, cleared_input, video_file, final_status = app.process_message(user_input, history)
@@ -300,19 +315,20 @@ def create_interface():
             4. **Video Generation** - Real lipsync using LatentSync
             5. **Video Controls** - Manual play/pause/stop buttons
             6. **Progress Tracking** - Shows processing steps
+            7. **Smart Video Update** - Only updates video when generation succeeds
             
             ### How it Works:
             - The welcome video loads when you open the page
             - When you send a message, AI generates a text response
             - Text is converted to speech using ChatterboxTTS
             - Video is generated using LatentSync pipeline
-            - New video replaces the welcome video
+            - New video only replaces the old one when generation succeeds
             
             ### Processing Pipeline:
             1. **Text Generation** - Gemini AI creates response
             2. **Audio Generation** - ChatterboxTTS converts text to speech
             3. **Video Generation** - LatentSync creates lipsync video
-            4. **Video Display** - New video replaces previous one
+            4. **Video Display** - New video replaces previous one (only if successful)
             
             ### Requirements:
             - **GPU**: Required for TTS and video generation
