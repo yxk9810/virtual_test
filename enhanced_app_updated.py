@@ -60,8 +60,8 @@ class VirtualChatApp:
         
         print(f"AI回复: {ai_response}")
         
-        # 先将文本回复添加到历史记录
-        new_history = history + [[user_input, ai_response]]
+        # 先将文本回复添加到历史记录（使用正确的格式）
+        new_history = history + [{"role": "user", "content": user_input}, {"role": "assistant", "content": ai_response}]
         
         # 2. 生成音频
         progress(0.3, desc="🎵 Generating audio...")
@@ -187,7 +187,7 @@ def create_interface():
                     show_share_button=False,
                     show_copy_button=True,
                     elem_classes=["chat-container"],
-                    type="messages"
+                    type="messages"  # 使用messages格式
                 )
                 
                 # 用户输入区域
