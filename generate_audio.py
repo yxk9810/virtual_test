@@ -12,7 +12,7 @@ def generate_audio(text, output_path="generated_audio.wav"):
         device = 'cuda'
         
         # 音频提示路径
-        AUDIO_PROMPT_PATH = "/kaggle/input/audio-demo1/demo1_audio.wav"
+        AUDIO_PROMPT_PATH = "./demo1_audio.wav"
         
         # 生成音频
         wav = model.generate(text, audio_prompt_path=AUDIO_PROMPT_PATH)
