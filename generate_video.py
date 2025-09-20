@@ -10,129 +10,177 @@ import sys
 
 loop_vid_from_endframe = True
 
-# 全局变量存储模型，避免重复加载
-_pipeline = None
-_config = None
+# 全局变量存储LatentSync路径
+LATENTSYNC_PATH = None
+
+def find_latentsync_path():
+    """查找LatentSync目录路径"""
+    global LATENTSYNC_PATH
+    
+    if LATENTSYNC_PATH is not None:
+        return LATENTSYNC_PATH
+    
+    # 检查当前目录
+    if os.path.exists("LatentSync"):
+        LATENTSYNC_PATH = os.path.abspath("LatentSync")
+        return LATENTSYNC_PATH
+    
+    # 检查父目录
+    parent_dir = os.path.dirname(os.getcwd())
+    latentsync_in_parent = os.path.join(parent_dir, "LatentSync")
+    if os.path.exists(latentsync_in_parent):
+        LATENTSYNC_PATH = latentsync_in_parent
+        return LATENTSYNC_PATH
+    
+    # 检查当前目录的上级目录
+    current_dir = os.getcwd()
+    for _ in range(3):  # 最多向上查找3级目录
+        parent = os.path.dirname(current_dir)
+        latentsync_path = os.path.join(parent, "LatentSync")
+        if os.path.exists(latentsync_path):
+            LATENTSYNC_PATH = latentsync_path
+            return LATENTSYNC_PATH
+        current_dir = parent
+    
+    return None
 
 def setup_latentsync():
-    """设置LatentSync环境和下载模型"""
-    global _pipeline, _config
+    """设置LatentSync环境"""
+    print("🔍 正在查找LatentSync目录...")
     
-    if _pipeline is not None:
-        return _pipeline, _config
+    latentsync_path = find_latentsync_path()
     
-    print("正在设置LatentSync环境...")
+    if latentsync_path is None:
+        print("📥 未找到LatentSync目录，正在克隆...")
+        try:
+            subprocess.run(["git", "clone", "https://github.com/Isi-dev/LatentSync"], check=True)
+            LATENTSYNC_PATH = os.path.abspath("LatentSync")
+            print(f"✅ LatentSync克隆完成: {LATENTSYNC_PATH}")
+        except subprocess.CalledProcessError as e:
+            print(f"❌ 克隆失败: {e}")
+            return False
+    else:
+        print(f"✅ 找到LatentSync目录: {latentsync_path}")
     
-    # 检查LatentSync目录
-    if not os.path.exists("LatentSync"):
-        print("正在克隆LatentSync仓库...")
-        subprocess.run(["git", "clone", "https://github.com/Isi-dev/LatentSync"], check=True)
+    # 验证LatentSync目录结构
+    config_file = os.path.join(LATENTSYNC_PATH, "configs", "unet", "first_stage.yaml")
+    if not os.path.exists(config_file):
+        print(f"❌ 错误：未找到LatentSync配置文件: {config_file}")
+        return False
     
-    # 切换到LatentSync目录
-    original_dir = os.getcwd()
-    if not os.getcwd().endswith("LatentSync"):
-        os.chdir("LatentSync")
+    print("✅ LatentSync环境设置完成")
+    return True
+
+def download_models():
+    """下载必要的模型文件"""
+    print("📥 正在下载模型文件...")
     
-    try:
-        # 现在导入LatentSync相关模块
-        from omegaconf import OmegaConf
-        from diffusers import AutoencoderKL, DDIMScheduler
-        from latentsync.models.unet import UNet3DConditionModel
-        from latentsync.pipelines.lipsync_pipeline import LipsyncPipeline
-        from latentsync.whisper.audio2feature import Audio2Feature
-        from diffusers.utils.import_utils import is_xformers_available
-        from accelerate.utils import set_seed
-        
-        # 创建必要的目录 - 使用原来的路径定义
-        os.makedirs("/kaggle/working//.cache/torch/hub/checkpoints", exist_ok=True)
-        os.makedirs("checkpoints", exist_ok=True)
-        
-        # 模型下载URLs - 使用原来的路径定义
-        model_urls = {
-            "/kaggle/working//.cache/torch/hub/checkpoints/s3fd-619a316812.pth":
-                "https://huggingface.co/Isi99999/LatentSync/resolve/main/auxiliary/s3fd-619a316812.pth",
-            "/kaggle/working/.cache/torch/hub/checkpoints/2DFAN4-cd938726ad.zip":
-                "https://huggingface.co/Isi99999/LatentSync/resolve/main/auxiliary/2DFAN4-cd938726ad.zip",
-            "checkpoints/latentsync_unet.pt":
-                "https://huggingface.co/Isi99999/LatentSync/resolve/main/latentsync_unet.pt",
-            "checkpoints/tiny.pt":
-                "https://huggingface.co/Isi99999/LatentSync/resolve/main/whisper/tiny.pt",
-            "checkpoints/diffusion_pytorch_model.safetensors":
-                "https://huggingface.co/stabilityai/sd-vae-ft-mse/resolve/main/diffusion_pytorch_model.safetensors",
-            "checkpoints/config.json":
-                "https://huggingface.co/stabilityai/sd-vae-ft-mse/raw/main/config.json",
-        }
-        
-        # 下载模型文件
-        for file_path, url in model_urls.items():
-            if not os.path.exists(file_path):
-                print(f"正在下载 {file_path} ...")
-                subprocess.run(["wget", url, "-O", file_path], check=True)
-            else:
-                print(f"文件 {file_path} 已存在，跳过下载")
-        
-        print("Setup complete.")
-        
-        # 加载配置
-        config_path = "configs/unet/first_stage.yaml"
-        _config = OmegaConf.load(config_path)
-        
-        # 设置设备类型
-        is_fp16_supported = torch.cuda.is_available() and torch.cuda.get_device_capability()[0] > 7
-        dtype = torch.float16 if is_fp16_supported else torch.float32
-        
-        # 初始化调度器
-        scheduler = DDIMScheduler.from_pretrained("configs")
-        
-        # 初始化音频编码器
-        whisper_model_path = "checkpoints/tiny.pt"
-        audio_encoder = Audio2Feature(model_path=whisper_model_path, device="cuda", num_frames=_config.data.num_frames)
-        
-        # 初始化VAE
-        vae = AutoencoderKL.from_pretrained("checkpoints", torch_dtype=dtype, local_files_only=True)
-        vae.config.scaling_factor = 0.18215
-        vae.config.shift_factor = 0
-        
-        # 初始化UNet
-        inference_ckpt_path = "checkpoints/latentsync_unet.pt"
-        unet, _ = UNet3DConditionModel.from_pretrained(
-            OmegaConf.to_container(_config.model),
-            inference_ckpt_path,
-            device="cpu",
-        )
-        unet = unet.to(dtype=dtype)
-        
-        # 启用xformers优化
-        if is_xformers_available():
-            unet.enable_xformers_memory_efficient_attention()
-            print('x_formers available!')
-        
-        # 创建pipeline
-        _pipeline = LipsyncPipeline(
-            vae=vae,
-            audio_encoder=audio_encoder,
-            unet=unet,
-            scheduler=scheduler,
-        ).to("cuda")
-        
-        print("LatentSync环境设置完成！")
-        return _pipeline, _config
-        
-    finally:
-        # 恢复原始目录
-        os.chdir(original_dir)
+    # 创建必要的目录
+    cache_dir = os.path.join(LATENTSYNC_PATH, "/kaggle/working//.cache/torch/hub/checkpoints")
+    checkpoints_dir = os.path.join(LATENTSYNC_PATH, "checkpoints")
+    
+    os.makedirs(cache_dir, exist_ok=True)
+    os.makedirs(checkpoints_dir, exist_ok=True)
+    
+    # 模型下载URLs
+    model_urls = {
+        os.path.join(LATENTSYNC_PATH, "/kaggle/working//.cache/torch/hub/checkpoints/s3fd-619a316812.pth"):
+            "https://huggingface.co/Isi99999/LatentSync/resolve/main/auxiliary/s3fd-619a316812.pth",
+        os.path.join(LATENTSYNC_PATH, "/kaggle/working/.cache/torch/hub/checkpoints/2DFAN4-cd938726ad.zip"):
+            "https://huggingface.co/Isi99999/LatentSync/resolve/main/auxiliary/2DFAN4-cd938726ad.zip",
+        os.path.join(LATENTSYNC_PATH, "checkpoints/latentsync_unet.pt"):
+            "https://huggingface.co/Isi99999/LatentSync/resolve/main/latentsync_unet.pt",
+        os.path.join(LATENTSYNC_PATH, "checkpoints/tiny.pt"):
+            "https://huggingface.co/Isi99999/LatentSync/resolve/main/whisper/tiny.pt",
+        os.path.join(LATENTSYNC_PATH, "checkpoints/diffusion_pytorch_model.safetensors"):
+            "https://huggingface.co/stabilityai/sd-vae-ft-mse/resolve/main/diffusion_pytorch_model.safetensors",
+        os.path.join(LATENTSYNC_PATH, "checkpoints/config.json"):
+            "https://huggingface.co/stabilityai/sd-vae-ft-mse/raw/main/config.json",
+    }
+    
+    # 下载模型文件
+    for file_path, url in model_urls.items():
+        if not os.path.exists(file_path):
+            print(f"正在下载 {file_path} ...")
+            subprocess.run(["wget", url, "-O", file_path], check=True)
+        else:
+            print(f"文件 {file_path} 已存在，跳过下载")
+    
+    print("✅ 模型下载完成！")
+
+def initialize_pipeline():
+    """初始化LatentSync pipeline"""
+    print("🔧 正在初始化LatentSync pipeline...")
+    
+    # 添加LatentSync路径到Python路径
+    if LATENTSYNC_PATH not in sys.path:
+        sys.path.insert(0, LATENTSYNC_PATH)
+    
+    # 导入LatentSync相关模块
+    from omegaconf import OmegaConf
+    from diffusers import AutoencoderKL, DDIMScheduler
+    from latentsync.models.unet import UNet3DConditionModel
+    from latentsync.pipelines.lipsync_pipeline import LipsyncPipeline
+    from latentsync.whisper.audio2feature import Audio2Feature
+    from diffusers.utils.import_utils import is_xformers_available
+    from accelerate.utils import set_seed
+    
+    # 加载配置
+    config_path = os.path.join(LATENTSYNC_PATH, "configs", "unet", "first_stage.yaml")
+    config = OmegaConf.load(config_path)
+    
+    # 设置设备类型
+    is_fp16_supported = torch.cuda.is_available() and torch.cuda.get_device_capability()[0] > 7
+    dtype = torch.float16 if is_fp16_supported else torch.float32
+    
+    # 初始化调度器
+    scheduler = DDIMScheduler.from_pretrained(os.path.join(LATENTSYNC_PATH, "configs"))
+    
+    # 初始化音频编码器
+    whisper_model_path = os.path.join(LATENTSYNC_PATH, "checkpoints", "tiny.pt")
+    audio_encoder = Audio2Feature(model_path=whisper_model_path, device="cuda", num_frames=config.data.num_frames)
+    
+    # 初始化VAE
+    vae = AutoencoderKL.from_pretrained(os.path.join(LATENTSYNC_PATH, "checkpoints"), torch_dtype=dtype, local_files_only=True)
+    vae.config.scaling_factor = 0.18215
+    vae.config.shift_factor = 0
+    
+    # 初始化UNet
+    inference_ckpt_path = os.path.join(LATENTSYNC_PATH, "checkpoints", "latentsync_unet.pt")
+    unet, _ = UNet3DConditionModel.from_pretrained(
+        OmegaConf.to_container(config.model),
+        inference_ckpt_path,
+        device="cpu",
+    )
+    unet = unet.to(dtype=dtype)
+    
+    # 启用xformers优化
+    if is_xformers_available():
+        unet.enable_xformers_memory_efficient_attention()
+        print('✅ xformers 可用！')
+    
+    # 创建pipeline
+    pipeline = LipsyncPipeline(
+        vae=vae,
+        audio_encoder=audio_encoder,
+        unet=unet,
+        scheduler=scheduler,
+    ).to("cuda")
+    
+    print("✅ Pipeline初始化完成！")
+    return pipeline, config
 
 def perform_inference(video_path, audio_path, seed, num_steps, guidance_scale, output_path):
     """执行LatentSync推理生成视频"""
     try:
-        # 设置LatentSync环境
-        pipeline, config = setup_latentsync()
+        print(f"🎬 开始执行推理: {video_path} + {audio_path} -> {output_path}")
+        print(f"参数: seed={seed}, steps={num_steps}, guidance={guidance_scale}")
+        
+        # 初始化pipeline
+        pipeline, config = initialize_pipeline()
         
         # 导入set_seed函数
         from accelerate.utils import set_seed
-        
-        print(f"开始执行推理: {video_path} + {audio_path} -> {output_path}")
-        print(f"参数: seed={seed}, steps={num_steps}, guidance={guidance_scale}")
         
         # 设置随机种子
         set_seed(seed)
@@ -155,12 +203,11 @@ def perform_inference(video_path, audio_path, seed, num_steps, guidance_scale, o
             height=config.data.resolution,
         )
         
-        print("推理完成！")
+        print("✅ 推理完成！")
         return output_path
         
     except Exception as e:
-        print(f"推理过程中发生错误: {str(e)}")
-        # 如果推理失败，返回原始视频路径
+        print(f"❌ 推理过程中发生错误: {str(e)}")
         return video_path
 
 def convert_video_fps(input_path, target_fps):
@@ -477,34 +524,34 @@ def pad_audio_to_multiple_of_16(audio_path, target_fps=25):
 
 
 
+
+
 def generate_video(video_path, audio_path, seed=1247, num_steps=20, guidance_scale=1.0, 
                   video_scale=0.5, output_fps=25, output_path="output_video.mp4"):
     """
-    主函数：生成视频
+    主函数：生成视频 - 可在任何目录下运行
     """
     
-    print("开始视频生成...")
+    print("🎬 开始视频生成...")
     print(f"视频路径: {video_path}")
     print(f"音频路径: {audio_path}")
     
-    # 首先进行LatentSync环境设置
-    print("正在初始化LatentSync环境...")
-    try:
-        pipeline, config = setup_latentsync()
-        print("LatentSync环境初始化完成！")
-    except Exception as e:
-        print(f"LatentSync环境初始化失败: {str(e)}")
+    # 设置LatentSync环境
+    if not setup_latentsync():
         return None
     
+    # 下载模型
+    download_models()
+    
     if not os.path.exists(video_path):
-        print(f"错误: 视频文件不存在 {video_path}")
+        print(f"❌ 错误: 视频文件不存在 {video_path}")
         return None
         
     if not os.path.exists(audio_path):
-        print(f"错误: 音频文件不存在 {audio_path}")
+        print(f"❌ 错误: 音频文件不存在 {audio_path}")
         return None
 
-    print("文件检查通过，开始处理...")
+    print("✅ 文件检查通过，开始处理...")
     
     work_video_path = "working_video.mp4"
     work_audio_path = "working_audio.wav"
@@ -513,7 +560,7 @@ def generate_video(video_path, audio_path, seed=1247, num_steps=20, guidance_sca
         shutil.copy2(video_path, work_video_path)
         shutil.copy2(audio_path, work_audio_path)
     except Exception as e:
-        print(f"文件复制失败: {str(e)}")
+        print(f"❌ 文件复制失败: {str(e)}")
         return None
 
     width, height = 0, 0
@@ -522,37 +569,37 @@ def generate_video(video_path, audio_path, seed=1247, num_steps=20, guidance_sca
         if cap.isOpened():
             width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            print(f"视频尺寸: {width}x{height}")
+            print(f"📐 视频尺寸: {width}x{height}")
         else:
-            print("警告: 无法打开视频文件获取尺寸")
+            print("⚠️ 警告: 无法打开视频文件获取尺寸")
         cap.release()
     except Exception as e:
-        print(f"获取视频尺寸失败: {str(e)}")
+        print(f"❌ 获取视频尺寸失败: {str(e)}")
 
     try:
         work_video_path = convert_video_fps(work_video_path, 25)
         if not work_video_path:
-            print("视频帧率转换失败")
+            print("❌ 视频帧率转换失败")
             return None
 
         work_audio_path, num_frames, audio_duration = pad_audio_to_multiple_of_16(work_audio_path, target_fps=25)
 
         video_duration = get_video_duration(work_video_path)
-        print(f"音频时长: {audio_duration:.2f}秒")
-        print(f"视频时长: {video_duration:.2f}秒")
+        print(f"🎵 音频时长: {audio_duration:.2f}秒")
+        print(f"🎬 视频时长: {video_duration:.2f}秒")
 
         if audio_duration > video_duration:
-            print("音频较长，扩展视频...")
+            print("📏 音频较长，扩展视频...")
             work_video_path = extend_video(work_video_path, audio_duration)
             video_duration = get_video_duration(work_video_path)
             if video_duration > audio_duration:
-                print("视频扩展过长，进行裁剪...")
+                print("✂️ 视频扩展过长，进行裁剪...")
                 work_video_path = trim_video(work_video_path, audio_duration)
         elif video_duration > audio_duration:
-            print("视频较长，裁剪视频...")
+            print("✂️ 视频较长，裁剪视频...")
             work_video_path = trim_video(work_video_path, audio_duration)
 
-        print("开始执行推理...")
+        print("🚀 开始执行推理...")
         temp_output = "temp_output_video.mp4"
         
         perform_inference(work_video_path, work_audio_path, seed, num_steps, guidance_scale, temp_output)
@@ -562,18 +609,18 @@ def generate_video(video_path, audio_path, seed=1247, num_steps=20, guidance_sca
             if final_output != output_path:
                 shutil.move(final_output, output_path)
             
-            print(f"视频生成成功！输出文件: {output_path}")
+            print(f"🎉 视频生成成功！输出文件: {output_path}")
             
             if width > 0 and height > 0:
-                print(f"输出视频尺寸: {int(width * video_scale)}x{int(height * video_scale)}")
+                print(f"📐 输出视频尺寸: {int(width * video_scale)}x{int(height * video_scale)}")
             
             return output_path
         else:
-            print("最终视频输出失败")
+            print("❌ 最终视频输出失败")
             return None
 
     except Exception as e:
-        print(f"处理过程中发生错误: {str(e)}")
+        print(f"❌ 处理过程中发生错误: {str(e)}")
         return None
         
     finally:
@@ -584,14 +631,15 @@ def generate_video(video_path, audio_path, seed=1247, num_steps=20, guidance_sca
                 try:
                     os.remove(temp_file)
                 except Exception as e:
-                    print(f"清理临时文件失败 {temp_file}: {str(e)}")
+                    print(f"⚠️ 清理临时文件失败 {temp_file}: {str(e)}")
         
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("用法: python generate_video.py <video_path> <audio_path> [output_path]")
+        print("📖 用法: python generate_video.py <video_path> <audio_path> [output_path]")
+        print("💡 提示: 可在任何目录下运行，会自动查找或下载LatentSync")
         sys.exit(1)
     
     video_path = sys.argv[1]
@@ -610,7 +658,7 @@ if __name__ == "__main__":
     )
     
     if result:
-        print(f"成功生成视频: {result}")
+        print(f"🎉 成功生成视频: {result}")
     else:
-        print("视频生成失败")
+        print("❌ 视频生成失败")
         sys.exit(1)
