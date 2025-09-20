@@ -15,12 +15,13 @@ class VirtualChatApp:
             system_instruction=prompt
         )
         self.chat_history = []
-        # 使用本地视频路径
-        self.base_video_path = os.path.expanduser("~/Downloads/kling_20250806_Image_to_Video_this_woman_3742_0.mp4")
+        # 使用welcome_video.mp4作为基础视频
+        self.base_video_path = "welcome_video.mp4"
         
         # 检查视频文件是否存在
         if not os.path.exists(self.base_video_path):
             print(f"警告: 基础视频文件不存在: {self.base_video_path}")
+            print("请确保welcome_video.mp4文件存在于当前目录")
         else:
             print(f"基础视频文件已找到: {self.base_video_path}")
         
@@ -32,11 +33,11 @@ class VirtualChatApp:
         try:
             initial_video_path = "welcome_video.mp4"
             if os.path.exists(self.base_video_path):
-                shutil.copy2(self.base_video_path, initial_video_path)
-                print(f"初始欢迎视频已创建: {initial_video_path}")
+                # 如果welcome_video.mp4已经存在，直接使用
+                print(f"使用现有的欢迎视频: {initial_video_path}")
                 return initial_video_path
             else:
-                print("无法创建初始视频，基础视频文件不存在")
+                print("无法创建初始视频，welcome_video.mp4文件不存在")
                 return None
         except Exception as e:
             print(f"创建初始视频失败: {e}")
@@ -317,6 +318,7 @@ def create_interface():
             - **GPU**: Required for TTS and video generation
             - **LatentSync**: Must be cloned and configured
             - **Dependencies**: All required packages installed
+            - **welcome_video.mp4**: Must exist in current directory
             """)
     
     return demo
