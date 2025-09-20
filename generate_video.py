@@ -62,7 +62,7 @@ def setup_latentsync():
             return False
     else:
         print(f"✅ 找到LatentSync目录: {latentsync_path}")
-        LATENTSYNC_PATH = latentsync_path  # 修复：设置全局变量
+        LATENTSYNC_PATH = latentsync_path
     
     # 验证LatentSync目录结构
     config_file = os.path.join(LATENTSYNC_PATH, "configs", "unet", "first_stage.yaml")
@@ -70,8 +70,31 @@ def setup_latentsync():
         print(f"❌ 错误：未找到LatentSync配置文件: {config_file}")
         return False
     
+    # 检查mask.png文件
+    mask_file = os.path.join(LATENTSYNC_PATH, "latentsync", "utils", "mask.png")
+    if not os.path.exists(mask_file):
+        print(f"⚠️ 警告：未找到mask.png文件: {mask_file}")
+        print("正在创建默认mask文件...")
+        try:
+            # 创建utils目录
+            utils_dir = os.path.join(LATENTSYNC_PATH, "latentsync", "utils")
+            os.makedirs(utils_dir, exist_ok=True)
+            
+            # 创建一个简单的白色mask图像
+            import cv2
+            import numpy as np
+            
+            # 创建512x512的白色mask
+            mask = np.ones((512, 512, 3), dtype=np.uint8) * 255
+            cv2.imwrite(mask_file, mask)
+            print(f"✅ 已创建默认mask文件: {mask_file}")
+        except Exception as e:
+            print(f"❌ 创建mask文件失败: {e}")
+            return False
+    
     print("✅ LatentSync环境设置完成")
     return True
+
 def download_models():
     """下载必要的模型文件"""
     print("📥 正在下载模型文件...")
@@ -177,38 +200,62 @@ def perform_inference(video_path, audio_path, seed, num_steps, guidance_scale, o
         print(f"🎬 开始执行推理: {video_path} + {audio_path} -> {output_path}")
         print(f"参数: seed={seed}, steps={num_steps}, guidance={guidance_scale}")
         
-        # 初始化pipeline
-        pipeline, config = initialize_pipeline()
+        # 保存当前工作目录
+        original_dir = os.getcwd()
         
-        # 导入set_seed函数
-        from accelerate.utils import set_seed
-        
-        # 设置随机种子
-        set_seed(seed)
-        
-        # 确定数据类型
-        is_fp16_supported = torch.cuda.is_available() and torch.cuda.get_device_capability()[0] > 7
-        dtype = torch.float16 if is_fp16_supported else torch.float32
-        
-        # 执行推理
-        pipeline(
-            video_path=video_path,
-            audio_path=audio_path,
-            video_out_path=output_path,
-            video_mask_path=output_path.replace(".mp4", "_mask.mp4"),
-            num_frames=config.data.num_frames,
-            num_inference_steps=num_steps,
-            guidance_scale=guidance_scale,
-            weight_dtype=dtype,
-            width=config.data.resolution,
-            height=config.data.resolution,
-        )
-        
-        print("✅ 推理完成！")
-        return output_path
+        try:
+            # 切换到LatentSync目录
+            os.chdir(LATENTSYNC_PATH)
+            print(f"📁 切换到工作目录: {os.getcwd()}")
+            
+            # 初始化pipeline
+            pipeline, config = initialize_pipeline()
+            
+            # 导入set_seed函数
+            from accelerate.utils import set_seed
+            
+            # 设置随机种子
+            set_seed(seed)
+            
+            # 确定数据类型
+            is_fp16_supported = torch.cuda.is_available() and torch.cuda.get_device_capability()[0] > 7
+            dtype = torch.float16 if is_fp16_supported else torch.float32
+            
+            # 使用绝对路径
+            abs_video_path = os.path.abspath(video_path)
+            abs_audio_path = os.path.abspath(audio_path)
+            abs_output_path = os.path.abspath(output_path)
+            
+            print(f"📹 视频路径: {abs_video_path}")
+            print(f"🎵 音频路径: {abs_audio_path}")
+            print(f"📤 输出路径: {abs_output_path}")
+            
+            # 执行推理
+            pipeline(
+                video_path=abs_video_path,
+                audio_path=abs_audio_path,
+                video_out_path=abs_output_path,
+                video_mask_path=abs_output_path.replace(".mp4", "_mask.mp4"),
+                num_frames=config.data.num_frames,
+                num_inference_steps=num_steps,
+                guidance_scale=guidance_scale,
+                weight_dtype=dtype,
+                width=config.data.resolution,
+                height=config.data.resolution,
+            )
+            
+            print("✅ 推理完成！")
+            return abs_output_path
+            
+        finally:
+            # 恢复原始目录
+            os.chdir(original_dir)
+            print(f"📁 恢复原始目录: {os.getcwd()}")
         
     except Exception as e:
         print(f"❌ 推理过程中发生错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return video_path
 
 def convert_video_fps(input_path, target_fps):
@@ -419,7 +466,7 @@ def extend_video(video_path, target_duration):
             print(f"Error checking clip {clip}: {str(e)}")
             return video_path
 
-    extended_video_path = "welcome_video.mp4"
+    extended_video_path = "extended_video.mp4"
     concat_list_path = "concat_list.txt"
 
     try:
