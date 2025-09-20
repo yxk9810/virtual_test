@@ -43,9 +43,16 @@ def clone_latentsync():
     """克隆LatentSync仓库"""
     print("📥 正在克隆LatentSync仓库...")
     try:
+        # 保存当前目录
+        original_dir = os.getcwd()
+        # 切换到父目录进行克隆
+        parent_dir = os.path.dirname(original_dir)
+        os.chdir(parent_dir)
         subprocess.run(["git", "clone", "https://github.com/Isi-dev/LatentSync"], check=True)
-        latentsync_path = os.path.abspath("LatentSync")
+        latentsync_path = os.path.join(parent_dir, "LatentSync")
         print(f"✅ LatentSync克隆完成: {latentsync_path}")
+        # 恢复原目录
+        os.chdir(original_dir)
         return latentsync_path
     except subprocess.CalledProcessError as e:
         print(f"❌ 克隆失败: {e}")
