@@ -8,7 +8,158 @@ import shutil
 import cv2
 import sys
 
+# 添加LatentSync相关导入
+from omegaconf import OmegaConf
+from diffusers import AutoencoderKL, DDIMScheduler
+from latentsync.models.unet import UNet3DConditionModel
+from latentsync.pipelines.lipsync_pipeline import LipsyncPipeline
+from latentsync.whisper.audio2feature import Audio2Feature
+from diffusers.utils.import_utils import is_xformers_available
+from accelerate.utils import set_seed
+
 loop_vid_from_endframe = True
+
+# 全局变量存储模型，避免重复加载
+_pipeline = None
+_config = None
+
+def setup_latentsync():
+    """设置LatentSync环境和下载模型"""
+    global _pipeline, _config
+    
+    if _pipeline is not None:
+        return _pipeline, _config
+    
+    print("正在设置LatentSync环境...")
+    
+    # 检查LatentSync目录
+    if not os.path.exists("LatentSync"):
+        print("正在克隆LatentSync仓库...")
+        subprocess.run(["git", "clone", "https://github.com/Isi-dev/LatentSync"], check=True)
+    
+    # 切换到LatentSync目录
+    original_dir = os.getcwd()
+    if not os.getcwd().endswith("LatentSync"):
+        os.chdir("LatentSync")
+    
+    try:
+        # 创建必要的目录 - 使用原来的路径定义
+        os.makedirs("/kaggle/working//.cache/torch/hub/checkpoints", exist_ok=True)
+        os.makedirs("checkpoints", exist_ok=True)
+        
+        # 模型下载URLs - 使用原来的路径定义
+        model_urls = {
+            "/kaggle/working//.cache/torch/hub/checkpoints/s3fd-619a316812.pth":
+                "https://huggingface.co/Isi99999/LatentSync/resolve/main/auxiliary/s3fd-619a316812.pth",
+            "/kaggle/working/.cache/torch/hub/checkpoints/2DFAN4-cd938726ad.zip":
+                "https://huggingface.co/Isi99999/LatentSync/resolve/main/auxiliary/2DFAN4-cd938726ad.zip",
+            "checkpoints/latentsync_unet.pt":
+                "https://huggingface.co/Isi99999/LatentSync/resolve/main/latentsync_unet.pt",
+            "checkpoints/tiny.pt":
+                "https://huggingface.co/Isi99999/LatentSync/resolve/main/whisper/tiny.pt",
+            "checkpoints/diffusion_pytorch_model.safetensors":
+                "https://huggingface.co/stabilityai/sd-vae-ft-mse/resolve/main/diffusion_pytorch_model.safetensors",
+            "checkpoints/config.json":
+                "https://huggingface.co/stabilityai/sd-vae-ft-mse/raw/main/config.json",
+        }
+        
+        # 下载模型文件
+        for file_path, url in model_urls.items():
+            if not os.path.exists(file_path):
+                print(f"正在下载 {file_path} ...")
+                subprocess.run(["wget", url, "-O", file_path], check=True)
+            else:
+                print(f"文件 {file_path} 已存在，跳过下载")
+        
+        print("Setup complete.")
+        
+        # 加载配置
+        config_path = "configs/unet/first_stage.yaml"
+        _config = OmegaConf.load(config_path)
+        
+        # 设置设备类型
+        is_fp16_supported = torch.cuda.is_available() and torch.cuda.get_device_capability()[0] > 7
+        dtype = torch.float16 if is_fp16_supported else torch.float32
+        
+        # 初始化调度器
+        scheduler = DDIMScheduler.from_pretrained("configs")
+        
+        # 初始化音频编码器
+        whisper_model_path = "checkpoints/tiny.pt"
+        audio_encoder = Audio2Feature(model_path=whisper_model_path, device="cuda", num_frames=_config.data.num_frames)
+        
+        # 初始化VAE
+        vae = AutoencoderKL.from_pretrained("checkpoints", torch_dtype=dtype, local_files_only=True)
+        vae.config.scaling_factor = 0.18215
+        vae.config.shift_factor = 0
+        
+        # 初始化UNet
+        inference_ckpt_path = "checkpoints/latentsync_unet.pt"
+        unet, _ = UNet3DConditionModel.from_pretrained(
+            OmegaConf.to_container(_config.model),
+            inference_ckpt_path,
+            device="cpu",
+        )
+        unet = unet.to(dtype=dtype)
+        
+        # 启用xformers优化
+        if is_xformers_available():
+            unet.enable_xformers_memory_efficient_attention()
+            print('x_formers available!')
+        
+        # 创建pipeline
+        _pipeline = LipsyncPipeline(
+            vae=vae,
+            audio_encoder=audio_encoder,
+            unet=unet,
+            scheduler=scheduler,
+        ).to("cuda")
+        
+        print("LatentSync环境设置完成！")
+        return _pipeline, _config
+        
+    finally:
+        # 恢复原始目录
+        os.chdir(original_dir)
+
+def perform_inference(video_path, audio_path, seed, num_steps, guidance_scale, output_path):
+    """执行LatentSync推理生成视频"""
+    try:
+        # 设置LatentSync环境
+        pipeline, config = setup_latentsync()
+        
+        print(f"开始执行推理: {video_path} + {audio_path} -> {output_path}")
+        print(f"参数: seed={seed}, steps={num_steps}, guidance={guidance_scale}")
+        
+        # 设置随机种子
+        set_seed(seed)
+        
+        # 确定数据类型
+        is_fp16_supported = torch.cuda.is_available() and torch.cuda.get_device_capability()[0] > 7
+        dtype = torch.float16 if is_fp16_supported else torch.float32
+        
+        # 执行推理
+        pipeline(
+            video_path=video_path,
+            audio_path=audio_path,
+            video_out_path=output_path,
+            video_mask_path=output_path.replace(".mp4", "_mask.mp4"),
+            num_frames=config.data.num_frames,
+            num_inference_steps=num_steps,
+            guidance_scale=guidance_scale,
+            weight_dtype=dtype,
+            width=config.data.resolution,
+            height=config.data.resolution,
+        )
+        
+        print("推理完成！")
+        return output_path
+        
+    except Exception as e:
+        print(f"推理过程中发生错误: {str(e)}")
+        # 如果推理失败，返回原始视频路径
+        return video_path
+
 
 def convert_video_fps(input_path, target_fps):
     if not os.path.exists(input_path) or os.path.getsize(input_path) == 0:
@@ -322,15 +473,6 @@ def pad_audio_to_multiple_of_16(audio_path, target_fps=25):
 
     return padded_audio_path, int((waveform.shape[1] / sample_rate) * target_fps), waveform.shape[1] / sample_rate
 
-def perform_inference(video_path, audio_path, seed, num_steps, guidance_scale, output_path):
-    """执行推理生成视频 - 这里需要根据你的具体模型实现"""
-    # 这是一个占位符函数，你需要根据你的具体模型来实现
-    # 例如使用你的Grok listener或其他视频生成模型
-    print(f"执行推理: {video_path} + {audio_path} -> {output_path}")
-    print(f"参数: seed={seed}, steps={num_steps}, guidance={guidance_scale}")
-    
-    # 临时实现：直接复制输入视频作为输出
-    # 在实际使用中，这里应该调用你的视频生成模型
     import shutil
     shutil.copy2(video_path, output_path)
     print("推理完成（临时实现）")
