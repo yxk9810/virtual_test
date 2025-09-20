@@ -218,7 +218,7 @@ def extend_video(video_path, target_duration):
             print(f"Error checking clip {clip}: {str(e)}")
             return video_path
 
-    extended_video_path = "extended_video.mp4"
+    extended_video_path = "welcome_video.mp4"
     concat_list_path = "concat_list.txt"
 
     try:
