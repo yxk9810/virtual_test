@@ -78,7 +78,7 @@ class VirtualChatApp:
             ]
             
             print(f"执行音频生成命令: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
             
             if result.returncode == 0:
                 print(f"音频生成成功: {audio_filename}")
@@ -118,7 +118,7 @@ class VirtualChatApp:
             print(f"输入音频路径: {audio_file_abs}")
             print(f"输出视频路径: {video_file_abs}")
             
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)  # 5分钟超时
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3000)  # 5分钟超时
             
             print(f"视频生成返回码: {result.returncode}")
             print(f"视频生成标准输出: {result.stdout}")
